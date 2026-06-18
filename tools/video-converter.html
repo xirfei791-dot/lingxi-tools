@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>视频转换 - 灵犀工具箱</title>
+<link rel="stylesheet" href="../style.css">
+<style>
+  .progress-bar { width:100%; height:8px; background:#E2E8F0; border-radius:4px; margin:12px 0; overflow:hidden; }
+  .progress-bar .fill { height:100%; background:var(--primary); border-radius:4px; transition:width 0.3s; width:0%; }
+  .video-preview { max-width:100%; max-height:240px; border-radius:8px; display:none; margin:12px auto; }
+  .info-row { display:flex; gap:24px; flex-wrap:wrap; margin-top:8px; }
+  .info-item { font-size:13px; color:var(--text-light); }
+  .info-item strong { color:var(--text); }
+</style>
+</head>
+<body>
+<nav class="navbar"><div class="container nav-inner"><a href="/" class="logo">🧠 灵犀工具箱</a><div class="nav-links"><a href="../index.html">首页</a></div></div></nav>
+
+<div class="tool-page">
+  <a href="../index.html" class="back-link">← 返回首页</a>
+  <h1>🎬 视频转换器</h1>
+  <p class="subtitle">视频提取 MP3 音频 / 视频转 MP4——全部在浏览器本地处理</p>
+
+  <div class="tool-workspace">
+    <h3 style="margin-bottom:12px">📤 上传视频</h3>
+    <input type="file" id="videoFile" accept="video/*" style="margin-bottom:12px;">
+
+    <video id="videoPreview" class="video-preview" controls></video>
+
+    <div class="info-row" id="fileInfo" style="display:none;">
+      <span class="info-item">📦 大小：<strong id="fileSize">-</strong></span>
+      <span class="info-item">🎞️ 格式：<strong id="fileType">-</strong></span>
+      <span class="info-item">⏱️ 时长：<strong id="duration">-</strong></span>
+    </div>
+
+    <div style="margin-top:16px;">
+      <label style="font-weight:600;display:block;margin-bottom:8px;">🎯 转换格式</label>
+      <select id="format" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:8px;font-size:15px;margin-bottom:8px;">
+        <option value="mp3">🎵 MP3（提取音频）</option>
+        <option value="mp4">🎬 MP4（视频转码）</option>
+        <option value="webm">🌐 WebM</option>
+      </select>
+    </div>
+
+    <div style="margin-top:8px;">
+      <label style="font-weight:600;display:block;margin-bottom:8px;">⚙️ 质量</label>
+      <select id="quality" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:8px;font-size:15px;margin-bottom:16px;">
+        <option value="high">🔴 高（文件较大）</option>
+        <option value="medium" selected>🟡 中（推荐）</option>
+        <option value="low">🟢 低（文件较小）</option>
+      </select>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary-btn" id="convertBtn" disabled onclick="startConvert()">🔄 开始转换</button>
+      <button class="btn btn-secondary" id="downloadBtn" disabled onclick="downloadResult()">💾 下载</button>
+    </div>
+
+    <div class="progress-bar" id="progressWrap" style="display:none;">
+      <div class="fill" id="progressFill"></div>
+    </div>
+    <p id="statusText" style="font-size:13px;color:var(--text-light);margin-top:8px;"></p>
+  </div>
+</div>
+
+<script>
+let videoBlob = null, outputBlob = null, outputExt = 'mp3';
+const videoFile = document.getElementById('videoFile');
+const videoPreview = document.getElementById('videoPreview');
+const fileInfo = document.getElementById('fileInfo');
+const convertBtn = document.getElementById('convertBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+const progressWrap = document.getElementById('progressWrap');
+const progressFill = document.getElementById('progressFill');
+const statusText = document.getElementById('statusText');
+const formatSelect = document.getElementById('format');
+const qualitySelect = document.getElementById('quality');
+
+videoFile.addEventListener('change', function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  videoBlob = file;
+  convertBtn.disabled = false;
+  downloadBtn.disabled = true;
+  outputBlob = null;
+  statusText.textContent = '';
+
+  // Show file info
+  document.getElementById('fileSize').textContent = (file.size/1024/1024).toFixed(1) + ' MB';
+  document.getElementById('fileType').textContent = file.type || file.name.split('.').pop().toUpperCase();
+
+  // Video preview
+  const url = URL.createObjectURL(file);
+  videoPreview.src = url;
+  videoPreview.style.display = 'block';
+  fileInfo.style.display = 'flex';
+
+  // Get duration
+  videoPreview.onloadedmetadata = function() {
+    const d = videoPreview.duration;
+    const m = Math.floor(d/60), s = Math.floor(d%60);
+    document.getElementById('duration').textContent = m + ':' + (s<10?'0':'') + s;
+  };
+});
+
+formatSelect.addEventListener('change', function() {
+  outputExt = this.value;
+  // Adjust quality options for MP3
+  if (outputExt === 'mp3') {
+    qualitySelect.innerHTML = `
+      <option value="320k">🔴 320kbps（高品质）</option>
+      <option value="192k" selected>🟡 192kbps（推荐）</option>
+      <option value="128k">🟢 128kbps（小文件）</option>`;
+  } else {
+    qualitySelect.innerHTML = `
+      <option value="high">🔴 高（文件较大）</option>
+      <option value="medium" selected>🟡 中（推荐）</option>
+      <option value="low">🟢 低（文件较小）</option>`;
+  }
+});
+
+async function startConvert() {
+  if (!videoBlob) return;
+  convertBtn.disabled = true;
+  downloadBtn.disabled = true;
+  outputBlob = null;
+  progressWrap.style.display = 'block';
+  progressFill.style.width = '0%';
+  statusText.textContent = '正在处理……';
+
+  const format = formatSelect.value;
+  const quality = qualitySelect.value;
+
+  try {
+    if (format === 'mp3') {
+      // Extract audio from video
+      await extractAudio(quality);
+    } else {
+      // Re-encode video
+      await reencodeVideo(format, quality);
+    }
+    statusText.textContent = '✅ 转换完成！点击"下载"保存文件';
+    downloadBtn.disabled = false;
+  } catch(err) {
+    statusText.textContent = '❌ 转换失败：' + err.message;
+    console.error(err);
+  }
+
+  convertBtn.disabled = false;
+  progressFill.style.width = '100%';
+}
+
+function extractAudio(quality) {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    video.src = URL.createObjectURL(videoBlob);
+    video.muted = true;
+    video.play().then(() => {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaElementSource(video);
+
+      // Bitrate mapping
+      const bitrates = { '320k': 320000, '192k': 192000, '128k': 128000 };
+      const audioBitrate = bitrates[quality] || 192000;
+
+      const dest = audioCtx.createMediaStreamDestination();
+      source.connect(dest);
+      source.connect(audioCtx.destination);
+
+      const chunks = [];
+      let mediaRecorder;
+
+      try {
+        // Try MP3-capable MIME types
+        const mimeTypes = ['audio/mpeg', 'audio/mp3', 'audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm'];
+        let selectedMime = '';
+        for (const mt of mimeTypes) {
+          if (MediaRecorder.isTypeSupported(mt)) { selectedMime = mt; break; }
+        }
+        mediaRecorder = new MediaRecorder(dest.stream, {
+          mimeType: selectedMime || 'audio/webm',
+          audioBitsPerSecond: audioBitrate
+        });
+      } catch(e) {
+        mediaRecorder = new MediaRecorder(dest.stream, { audioBitsPerSecond: audioBitrate });
+      }
+
+      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+      mediaRecorder.onstop = () => {
+        const mime = mediaRecorder.mimeType.includes('mp3') || mediaRecorder.mimeType.includes('mpeg')
+          ? 'audio/mpeg' : 'audio/webm';
+        outputBlob = new Blob(chunks, { type: mime });
+        outputExt = mime.includes('mp3') || mime.includes('mpeg') ? 'mp3' : 'webm';
+        // Update the format label
+        if (outputExt === 'webm') {
+          statusText.textContent = '⚠️ 浏览器不支持纯 MP3 编码，已输出 WebM 音频。也可用在线工具转成 MP3。';
+        }
+        audioCtx.close();
+        video.pause();
+        URL.revokeObjectURL(video.src);
+        resolve();
+      };
+
+      mediaRecorder.start();
+      video.onended = () => mediaRecorder.stop();
+      video.onerror = reject;
+
+      // Update progress based on video playback
+      video.ontimeupdate = () => {
+        if (video.duration) {
+          const pct = Math.round((video.currentTime / video.duration) * 100);
+          progressFill.style.width = pct + '%';
+          statusText.textContent = '提取音频中……' + pct + '%';
+        }
+      };
+
+      // Timeout safety
+      setTimeout(() => {
+        if (mediaRecorder.state === 'recording') mediaRecorder.stop();
+      }, (video.duration || 300) * 1000 + 5000);
+    }).catch(reject);
+  });
+}
+
+function reencodeVideo(format, quality) {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    video.src = URL.createObjectURL(videoBlob);
+    video.muted = true;
+
+    video.onloadedmetadata = () => {
+      const canvas = document.createElement('canvas');
+      const w = video.videoWidth, h = video.videoHeight;
+
+      // Quality scaling
+      const scales = { high: 1, medium: 0.7, low: 0.5 };
+      const scale = scales[quality] || 0.7;
+      canvas.width = Math.round(w * scale);
+      canvas.height = Math.round(h * scale);
+
+      const ctx = canvas.getContext('2d');
+
+      // Determine MIME type
+      const mimeMap = { mp4: 'video/webm;codecs=vp8', webm: 'video/webm;codecs=vp8' };
+      const mime = mimeMap[format] || 'video/webm;codecs=vp8';
+      // Note: Most browsers don't support MP4 encoding via MediaRecorder, fallback to WebM
+      const finalMime = MediaRecorder.isTypeSupported(mime) ? mime : 'video/webm';
+
+      const stream = canvas.captureStream(30);
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const audioSource = audioCtx.createMediaElementSource(video);
+      const audioDest = audioCtx.createMediaStreamDestination();
+      audioSource.connect(audioDest);
+      audioSource.connect(audioCtx.destination);
+
+      // Merge tracks
+      const videoTrack = stream.getVideoTracks()[0];
+      const audioTrack = audioDest.stream.getAudioTracks()[0];
+      if (audioTrack) stream.addTrack(audioTrack);
+
+      const chunks = [];
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: finalMime,
+        videoBitsPerSecond: quality === 'high' ? 2500000 : quality === 'low' ? 500000 : 1500000
+      });
+
+      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+      mediaRecorder.onstop = () => {
+        outputBlob = new Blob(chunks, { type: finalMime });
+        outputExt = finalMime.includes('mp4') ? 'mp4' : 'webm';
+        if (outputExt === 'webm' && format === 'mp4') {
+          statusText.textContent = '⚠️ 浏览器不支持纯 MP4 编码，已输出 WebM 格式。如需 MP4 可用在线转换。';
+        }
+        audioCtx.close();
+        video.pause();
+        URL.revokeObjectURL(video.src);
+        resolve();
+      };
+
+      video.play();
+      mediaRecorder.start(1000);
+
+      // Animation loop
+      function drawFrame() {
+        if (video.paused || video.ended) return;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        if (video.duration) {
+          const pct = Math.round((video.currentTime / video.duration) * 100);
+          progressFill.style.width = pct + '%';
+          statusText.textContent = '转码中……' + pct + '%';
+        }
+        requestAnimationFrame(drawFrame);
+      }
+      drawFrame();
+
+      video.onended = () => mediaRecorder.stop();
+      video.onerror = reject;
+    };
+  });
+}
+
+function downloadResult() {
+  if (!outputBlob) return;
+  const name = (videoBlob.name || 'video').replace(/\.[^.]+$/, '');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(outputBlob);
+  a.download = name + '_converted.' + outputExt;
+  a.click();
+}
+</script>
+</body>
+</html>
